@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+pandas
+folium
+plotly
+python-multipart
