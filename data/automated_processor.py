@@ -40,6 +40,7 @@ class AutomatedGPSProcessor:
         self.lon_file = os.path.join(self.data_folder, "SN560_Lon_last15min.csv")
         self.s4c_file = os.path.join(self.data_folder, "SN560_S4C_last15min.csv")
         self.output_file = os.path.join(self.data_folder, "data.csv")
+        self.alert_file = os.path.join(self.data_folder, "log_s4c_alert.csv")
         
         # GitHub API setup
         self.github_headers = {
@@ -152,28 +153,91 @@ class AutomatedGPSProcessor:
             print(f"❌ Error saving CSV: {e}")
             return False
     
-    def upload_to_github(self) -> bool:
+    def generate_s4c_alert_file(self, records: List[Dict[str, Any]]) -> bool:
         """
-        Upload the data.csv file to GitHub
+        Generate log_s4c_alert.csv file with records where S4C >= 0.4
+        Implements 60-day logic: append if within 60 days, overwrite if older
         
+        Args:
+            records: List of record dictionaries
+            
         Returns:
             True if successful, False otherwise
         """
-        if not Path(self.output_file).exists():
-            print(f"❌ Output file not found: {self.output_file}")
+        try:
+            # Convert to DataFrame for easier filtering
+            df = pd.DataFrame(records)
+            
+            # Filter for S4C >= 0.4
+            alert_df = df[df['S4C'] >= 0.4]
+            
+            # Ensure columns are in the correct order
+            column_order = ['Satellite', 'Time', 'S4C', 'Lat', 'Lon']
+            alert_df = alert_df[column_order]
+            
+            # Check if alert file exists and implement 60-day logic
+            if os.path.exists(self.alert_file):
+                # Read existing alert file
+                existing_df = pd.read_csv(self.alert_file)
+                
+                if len(existing_df) > 0:
+                    # Check the date of the most recent record
+                    existing_df['Time'] = pd.to_datetime(existing_df['Time'])
+                    latest_record_date = existing_df['Time'].max()
+                    current_date = datetime.now()
+                    
+                    # Calculate days difference
+                    days_diff = (current_date - latest_record_date).days
+                    
+                    if days_diff <= 60:
+                        # Less than or equal to 60 days, append new data
+                        print(f"Latest record is {days_diff} days old. Appending new data.")
+                        combined_df = pd.concat([existing_df, alert_df], ignore_index=True)
+                        combined_df.to_csv(self.alert_file, index=False)
+                    else:
+                        # More than 60 days, overwrite
+                        print(f"Latest record is {days_diff} days old. Overwriting file.")
+                        alert_df.to_csv(self.alert_file, index=False)
+                else:
+                    # Empty file, just write new data
+                    alert_df.to_csv(self.alert_file, index=False)
+            else:
+                # File doesn't exist, create new
+                alert_df.to_csv(self.alert_file, index=False)
+            
+            alert_count = len(alert_df)
+            print(f"✅ Generated alert file with {alert_count} records (S4C >= 0.4) at {self.alert_file}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error generating S4C alert file: {e}")
+            return False
+    
+    def upload_file_to_github(self, local_file_path: str, repo_file_path: str) -> bool:
+        """
+        Upload a single file to GitHub
+        
+        Args:
+            local_file_path: Path to local file
+            repo_file_path: Path in repository
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not Path(local_file_path).exists():
+            print(f"❌ File not found: {local_file_path}")
             return False
         
         try:
             # Read and encode file content
-            with open(self.output_file, 'rb') as file:
+            with open(local_file_path, 'rb') as file:
                 content = base64.b64encode(file.read()).decode('utf-8')
             
             # Check if file exists in repository
-            repo_path = "data.csv"
-            file_exists, current_sha = self.check_github_file_exists(repo_path)
+            file_exists, current_sha = self.check_github_file_exists(repo_file_path)
             
             # Prepare API request
-            url = f"https://api.github.com/repos/{self.github_owner}/{self.github_repo}/contents/{repo_path}"
+            url = f"https://api.github.com/repos/{self.github_owner}/{self.github_repo}/contents/{repo_file_path}"
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             data = {
@@ -188,25 +252,44 @@ class AutomatedGPSProcessor:
             # Add SHA if file exists (for updates)
             if file_exists:
                 data['sha'] = current_sha
-                print("📝 Updating existing file on GitHub...")
+                print(f"📝 Updating existing {repo_file_path} on GitHub...")
             else:
-                print("📝 Creating new file on GitHub...")
+                print(f"📝 Creating new {repo_file_path} on GitHub...")
             
             # Make API request
             response = requests.put(url, headers=self.github_headers, json=data)
             
             if response.status_code in [200, 201]:
                 result = response.json()
-                print(f"✅ Successfully uploaded to GitHub: {result['content']['html_url']}")
+                print(f"✅ Successfully uploaded {repo_file_path} to GitHub: {result['content']['html_url']}")
                 return True
             else:
-                print(f"❌ GitHub upload failed: {response.status_code}")
+                print(f"❌ GitHub upload failed for {repo_file_path}: {response.status_code}")
                 print(f"Response: {response.text}")
                 return False
                 
         except Exception as e:
-            print(f"❌ Error uploading to GitHub: {e}")
+            print(f"❌ Error uploading {repo_file_path} to GitHub: {e}")
             return False
+    
+    def upload_to_github(self) -> bool:
+        """
+        Upload both data.csv and log_s4c_alert.csv files to GitHub
+        
+        Returns:
+            True if both uploads successful, False otherwise
+        """
+        success_count = 0
+        
+        # Upload data.csv
+        if self.upload_file_to_github(self.output_file, "data.csv"):
+            success_count += 1
+        
+        # Upload log_s4c_alert.csv
+        if self.upload_file_to_github(self.alert_file, "log_s4c_alert.csv"):
+            success_count += 1
+        
+        return success_count == 2
     
     def check_github_file_exists(self, file_path: str) -> tuple:
         """
@@ -260,7 +343,12 @@ class AutomatedGPSProcessor:
             print("❌ Processing cycle aborted: Failed to save CSV")
             return False
         
-        # Step 5: Upload to GitHub
+        # Step 5: Generate S4C alert file
+        if not self.generate_s4c_alert_file(records):
+            print("❌ Processing cycle aborted: Failed to generate alert file")
+            return False
+        
+        # Step 6: Upload to GitHub
         if not self.upload_to_github():
             print("❌ Processing cycle aborted: Failed to upload to GitHub")
             return False

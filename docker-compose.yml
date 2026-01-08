@@ -7,12 +7,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: gps_backend
+    restart: always
     # For development, you can mount the code to see changes without rebuilding
     # volumes:
     #   - ./backend:/app
-    # The port mapping is not strictly needed for service-to-service
-    # communication, but it's useful for directly accessing the API docs
-    # from the host machine at http://localhost:8000/docs
     ports:
       - "8000:8000"
 
@@ -22,10 +20,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: gps_frontend
+    restart: always
     # volumes:
     #   - ./frontend:/app
     ports:
       - "8501:8501"
-    # This ensures the backend container is started before the frontend
     depends_on:
       - backend

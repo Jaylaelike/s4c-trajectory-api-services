@@ -2,7 +2,9 @@
 import requests
 import base64
 import os
+import pandas as pd
 from pathlib import Path
+from datetime import datetime
 
 class GitHubUploader:
     def __init__(self, token, owner, repo):
@@ -179,20 +181,22 @@ def main():
     except Exception as e:
         print(f"❌ Upload failed: {e}")
     
-    # Example 2: Upload multiple CSV files
+    # Example 2: Upload multiple CSV files including log_s4c_alert.csv
     print("\n=== Multiple Files Upload ===")
-    print("⏭️ Skipping multiple files upload - only uploading data.csv")
-    # file_mappings = {
-    #     "sales_data.csv": "datasets/sales/sales_data.csv",
-    #     "customer_data.csv": "datasets/customers/customer_data.csv",
-    #     "product_data.csv": "datasets/products/product_data.csv"
-    # }
-    # 
-    # results = uploader.upload_multiple_csvs(file_mappings)
+    file_mappings = {
+        "data.csv": "data.csv",
+        "log_s4c_alert.csv": "log_s4c_alert.csv"
+    }
     
-    # Print summary for single file only
+    results = uploader.upload_multiple_csvs(file_mappings)
+    
+    # Print summary
     print("\n=== Upload Summary ===")
-    print("✅ Single file upload completed: data.csv")
+    successful_uploads = [r for r in results if r['success']]
+    print(f"✅ {len(successful_uploads)} files uploaded successfully")
+    for result in results:
+        status = "✅" if result['success'] else "❌"
+        print(f"{status} {result['local_path']} → {result['repo_path']}")
 
 
 if __name__ == "__main__":
@@ -200,6 +204,72 @@ if __name__ == "__main__":
 
 
 # Alternative simple function for quick uploads
+def filter_s4c_data(data_file="data.csv", alert_file="log_s4c_alert.csv"):
+    """
+    Filter data.csv for S4C >= 0.4 and create/update log_s4c_alert.csv
+    with 60-day logic
+    
+    Args:
+        data_file (str): Path to data CSV file
+        alert_file (str): Path to alert CSV file
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Check if data.csv exists
+        if not os.path.exists(data_file):
+            print(f"❌ {data_file} not found")
+            return False
+        
+        # Read data.csv
+        df = pd.read_csv(data_file)
+        
+        # Filter for S4C >= 0.4
+        alert_df = df[df['S4C'] >= 0.4]
+        
+        if len(alert_df) == 0:
+            print("No records with S4C >= 0.4 found")
+            return True
+        
+        # Check if alert file exists and implement 60-day logic
+        if os.path.exists(alert_file):
+            # Read existing alert file
+            existing_df = pd.read_csv(alert_file)
+            
+            if len(existing_df) > 0:
+                # Check the date of the most recent record
+                existing_df['Time'] = pd.to_datetime(existing_df['Time'])
+                latest_record_date = existing_df['Time'].max()
+                current_date = datetime.now()
+                
+                # Calculate days difference
+                days_diff = (current_date - latest_record_date).days
+                
+                if days_diff <= 60:
+                    # Less than or equal to 60 days, append new data
+                    print(f"Latest record is {days_diff} days old. Appending new data.")
+                    combined_df = pd.concat([existing_df, alert_df], ignore_index=True)
+                    combined_df.to_csv(alert_file, index=False)
+                else:
+                    # More than 60 days, overwrite
+                    print(f"Latest record is {days_diff} days old. Overwriting file.")
+                    alert_df.to_csv(alert_file, index=False)
+            else:
+                # Empty file, just write new data
+                alert_df.to_csv(alert_file, index=False)
+        else:
+            # File doesn't exist, create new
+            alert_df.to_csv(alert_file, index=False)
+        
+        print(f"✅ Created/updated {alert_file} with {len(alert_df)} records (S4C >= 0.4)")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error filtering S4C data: {e}")
+        return False
+
+
 def quick_upload(token, owner, repo, local_file, repo_path, message=None):
     """
     Quick function to upload a single CSV file
